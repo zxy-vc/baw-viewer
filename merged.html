@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ALM809P — Viewer por Nivel</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #111; color: #eee; font-family: 'Helvetica Neue', sans-serif; display: flex; height: 100vh; overflow: hidden; }
+#sidebar { width: 220px; background: #1a1a1a; border-right: 1px solid #333; padding: 16px; flex-shrink: 0; overflow-y: auto; }
+#sidebar h2 { font-size: 13px; color: #888; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 16px; }
+.level-group { margin-bottom: 16px; }
+.level-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+.scan-btn {
+  display: block; width: 100%; text-align: left; padding: 10px 12px;
+  background: #222; border: 1px solid #333; color: #ccc;
+  border-radius: 6px; cursor: pointer; font-size: 13px;
+  transition: all .15s; margin-bottom: 4px;
+}
+.scan-btn:hover { background: #2a2a2a; border-color: #555; color: #fff; }
+.scan-btn.active { background: #1e3a5f; border-color: #3b82f6; color: #fff; }
+#viewer { flex: 1; position: relative; }
+canvas { display: block; }
+#status { position: absolute; bottom: 12px; left: 12px; font-size: 12px; color: #888; }
+#loading { position: absolute; inset: 0; background: rgba(0,0,0,.7); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 14px; color: #ccc; display: none; }
+#controls { position: absolute; top: 12px; right: 12px; display: flex; gap: 8px; }
+.ctrl-btn { padding: 6px 12px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #eee; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.ctrl-btn:hover { background: rgba(255,255,255,.2); }
+#scan-name { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,.6); padding: 6px 12px; border-radius: 5px; font-size: 13px; color: #eee; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="sidebar">
+  <h2>ALM809P</h2>
+  <div class="level-group">
+    <div class="level-label">🅿️ Estacionamiento</div>
+    <button class="scan-btn" data-scan="N-1_Estacionamiento">N-1 Estacionamiento</button>
+  </div>
+  <div class="level-group">
+    <div class="level-label">🏢 Planta Baja</div>
+    <button class="scan-btn" data-scan="N0_Planta_Baja">N0 Planta Baja</button>
+  </div>
+  <div class="level-group">
+    <div class="level-label">🏠 Piso 1</div>
+    <button class="scan-btn" data-scan="N1_Piso1">N1 Piso 1</button>
+  </div>
+  <div class="level-group">
+    <div class="level-label">🏠 Piso 2</div>
+    <button class="scan-btn" data-scan="N2_Piso2">N2 Piso 2</button>
+  </div>
+  <div class="level-group">
+    <div class="level-label">🏠 Piso 3</div>
+    <button class="scan-btn" data-scan="N3_Piso3">N3 D304</button>
+  </div>
+  <div class="level-group">
+    <div class="level-label">🏠 Piso 4</div>
+    <button class="scan-btn" data-scan="N4_Piso4">N4 D403</button>
+  </div>
+</div>
+<div id="viewer">
+  <div id="scan-name">Selecciona un nivel →</div>
+  <div id="controls">
+    <button class="ctrl-btn" id="resetCam">Reset Cámara</button>
+    <button class="ctrl-btn" id="wireBtn">Wireframe</button>
+  </div>
+  <div id="loading">
+    <div>Cargando modelo…</div>
+    <div id="progress" style="margin-top:8px;color:#888;font-size:12px;"></div>
+  </div>
+  <div id="status">Orbita: click+drag · Zoom: scroll · Pan: shift+drag</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+
+const viewer = document.getElementById('viewer');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+viewer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(60, viewer.clientWidth / viewer.clientHeight, 0.01, 1000);
+camera.position.set(0, 5, 10);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+dir.position.set(5, 10, 5);
+scene.add(dir);
+scene.add(new THREE.HemisphereLight(0xfff8e0, 0x8090a0, 0.4));
+
+const grid = new THREE.GridHelper(40, 40, 0x333333, 0x222222);
+scene.add(grid);
+
+let currentMesh = null;
+let wireMode = false;
+let defaultCamPos, defaultTarget;
+
+function loadLevel(name) {
+  const loading = document.getElementById('loading');
+  const progress = document.getElementById('progress');
+  const scanName = document.getElementById('scan-name');
+  loading.style.display = 'flex';
+  progress.textContent = '';
+  scanName.textContent = name.replace(/_/g, ' ');
+
+  if (currentMesh) { scene.remove(currentMesh); currentMesh = null; }
+
+  const base = `merged/${name}/`;
+  const mtlLoader = new MTLLoader();
+  mtlLoader.setResourcePath(base);
+  mtlLoader.load(base + name + '.mtl',
+    (mats) => {
+      mats.preload();
+      const objLoader = new OBJLoader();
+      objLoader.setMaterials(mats);
+      objLoader.load(base + name + '.obj',
+        (obj) => { finalize(obj, name); },
+        (e) => { progress.textContent = Math.round(e.loaded/e.total*100) + '%'; },
+        () => { loadObjOnly(name, base); }
+      );
+    },
+    null,
+    () => { loadObjOnly(name, base); }
+  );
+}
+
+function loadObjOnly(name, base) {
+  const objLoader = new OBJLoader();
+  objLoader.load(base + name + '.obj',
+    (obj) => { finalize(obj, name); },
+    (e) => { document.getElementById('progress').textContent = Math.round(e.loaded/e.total*100) + '%'; }
+  );
+}
+
+function finalize(obj, name) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  obj.position.sub(center);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = 10 / maxDim;
+  obj.scale.setScalar(scale);
+
+  currentMesh = obj;
+  scene.add(obj);
+
+  const dist = maxDim * scale * 1.5;
+  camera.position.set(dist, dist * 0.7, dist);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  defaultCamPos = camera.position.clone();
+  defaultTarget = controls.target.clone();
+
+  if (wireMode) applyWireframe(true);
+  document.getElementById('loading').style.display = 'none';
+}
+
+function applyWireframe(on) {
+  if (!currentMesh) return;
+  currentMesh.traverse(c => {
+    if (c.isMesh) {
+      if (on) {
+        c.userData._mat = c.material;
+        c.material = new THREE.MeshBasicMaterial({ color: 0x44aaff, wireframe: true });
+      } else if (c.userData._mat) {
+        c.material = c.userData._mat;
+      }
+    }
+  });
+}
+
+document.getElementById('wireBtn').addEventListener('click', () => {
+  wireMode = !wireMode;
+  applyWireframe(wireMode);
+  document.getElementById('wireBtn').textContent = wireMode ? 'Sólido' : 'Wireframe';
+});
+
+document.getElementById('resetCam').addEventListener('click', () => {
+  if (!defaultCamPos) return;
+  camera.position.copy(defaultCamPos);
+  controls.target.copy(defaultTarget);
+  controls.update();
+});
+
+document.querySelectorAll('.scan-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.scan-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    wireMode = false;
+    document.getElementById('wireBtn').textContent = 'Wireframe';
+    loadLevel(btn.dataset.scan);
+  });
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = viewer.clientWidth / viewer.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(viewer.clientWidth, viewer.clientHeight);
+});
+
+function animate() { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+animate();
+</script>
+</body>
+</html>
